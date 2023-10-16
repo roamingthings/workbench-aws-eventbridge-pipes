@@ -1,17 +1,13 @@
 package de.roamingthings;
 
+import de.roamingthings.cdk.aws.pipes.EnrichedEventApiDestinationPipe;
 import io.micronaut.aws.cdk.function.MicronautFunction;
 import io.micronaut.aws.cdk.function.MicronautFunctionFile;
 import io.micronaut.starter.application.ApplicationType;
 import io.micronaut.starter.options.BuildTool;
-import lombok.Data;
-import org.jetbrains.annotations.NotNull;
 import software.amazon.awscdk.CfnOutput;
 import software.amazon.awscdk.CfnParameter;
 import software.amazon.awscdk.Duration;
-import software.amazon.awscdk.Environment;
-import software.amazon.awscdk.IStackSynthesizer;
-import software.amazon.awscdk.PermissionsBoundary;
 import software.amazon.awscdk.RemovalPolicy;
 import software.amazon.awscdk.SecretValue;
 import software.amazon.awscdk.Stack;
@@ -28,13 +24,6 @@ import software.amazon.awscdk.services.events.Connection;
 import software.amazon.awscdk.services.events.EventBus;
 import software.amazon.awscdk.services.events.EventPattern;
 import software.amazon.awscdk.services.events.HttpMethod;
-import software.amazon.awscdk.services.events.Rule;
-import software.amazon.awscdk.services.events.targets.SqsQueue;
-import software.amazon.awscdk.services.iam.Effect;
-import software.amazon.awscdk.services.iam.PolicyDocument;
-import software.amazon.awscdk.services.iam.PolicyStatement;
-import software.amazon.awscdk.services.iam.Role;
-import software.amazon.awscdk.services.iam.ServicePrincipal;
 import software.amazon.awscdk.services.lambda.Alias;
 import software.amazon.awscdk.services.lambda.Architecture;
 import software.amazon.awscdk.services.lambda.CfnFunction;
@@ -44,9 +33,6 @@ import software.amazon.awscdk.services.lambda.Runtime;
 import software.amazon.awscdk.services.lambda.Tracing;
 import software.amazon.awscdk.services.logs.RetentionDays;
 import software.amazon.awscdk.services.pipes.CfnPipe;
-import software.amazon.awscdk.services.sqs.DeadLetterQueue;
-import software.amazon.awscdk.services.sqs.IQueue;
-import software.amazon.awscdk.services.sqs.Queue;
 import software.constructs.Construct;
 
 import java.util.List;
@@ -57,13 +43,11 @@ import static de.roamingthings.InfraConstants.PERSON_TABLE_NAME_EXPORT_NAME;
 
 public class AppStack extends Stack {
 
-    private static final int MAX_RETRY_COUNT = 1;
-
     public AppStack(Construct parent, String id) {
         this(parent, id, null);
     }
 
-    public AppStack(Construct parent, String id, AppStackProps props) {
+    public AppStack(Construct parent, String id, StackProps props) {
         super(parent, id, props);
 
         var endpointUrl = CfnParameter.Builder.create(this, "endpointUrl")
@@ -71,17 +55,40 @@ public class AppStack extends Stack {
                 .description("The URL of the endpoint")
                 .build();
 
-        var personTable = createPesonTable();
-        var eventBus = createEventBridgeBus();
-        var dlq = createDlq();
-        var pipeSource = createQueue(MAX_RETRY_COUNT, dlq);
-        var enrichment = createEnricherFunction(personTable);
         var apiDestinationTarget = createApiDestinationTarget(
                 endpointUrl.getValueAsString(),
                 Authorization.basic("Toniuser", SecretValue.unsafePlainText("SomeSecret"))
         );
-        createCatchAllRule(eventBus, pipeSource);
-        createPipe(pipeSource, enrichment, apiDestinationTarget, dlq);
+
+        var personTable = createPesonTable();
+        var eventBus = createEventBridgeBus();
+        var pipeProps = EnrichedEventApiDestinationPipe.EnrichedEventApiDestinationPipeProps.builder()
+                .sourceEventBus(eventBus)
+                .eventPattern(EventPattern.builder().source(List.of("*")).build())
+                .enrichmentFunction(createEnricherFunction(personTable))
+                .apiDestination(apiDestinationTarget)
+                .maxRetryCount(1)
+                .sourceBatchSize(1)
+                .sourceMaximumBatchingWindowInSeconds(6)
+                .visibilityTimeout(Duration.seconds(30))
+                .retryPeriod(Duration.minutes(5))
+                .endpointUrl(endpointUrl.getValueAsString())
+                .targetHttpParameters(CfnPipe.PipeTargetHttpParametersProperty.builder()
+                        .pathParameterValues(List.of("$.id"))
+                        .build())
+                .removalPolicy(RemovalPolicy.DESTROY)
+                .build();
+
+        var pipe = new EnrichedEventApiDestinationPipe(this, "EnrichedEventApiDestinationPipe", pipeProps);
+        // Patch the default rule to catch all events
+        var ruleDefaultChild = pipe.getRule().getNode().getDefaultChild();
+        if (ruleDefaultChild instanceof CfnRule cfnRule) {
+            cfnRule.setEventPattern(Map.of(
+                    "source", List.of(Map.of(
+                            "prefix", ""
+                    ))
+            ));
+        }
 
         CfnOutput.Builder.create(this, "PersonTableName")
                 .exportName(PERSON_TABLE_NAME_EXPORT_NAME)
@@ -109,85 +116,6 @@ public class AppStack extends Stack {
                 .build();
     }
 
-    private void createPipe(IQueue pipeSource, IFunction enrichment, ApiDestination apiDestinationTarget, IQueue dlq) {
-        var pipeRole = createPipeRole(pipeSource, enrichment, apiDestinationTarget, dlq);
-        CfnPipe.Builder.create(this, "Pipe")
-                .source(pipeSource.getQueueArn())
-                .sourceParameters(CfnPipe.PipeSourceParametersProperty.builder()
-                        .sqsQueueParameters(CfnPipe.PipeSourceSqsQueueParametersProperty.builder()
-                                .batchSize(1)
-                                .maximumBatchingWindowInSeconds(6)
-                                .build())
-                        .build()
-                )
-                .enrichment(enrichment.getFunctionArn())
-                .enrichmentParameters(CfnPipe.PipeEnrichmentParametersProperty.builder().build())
-                .target(apiDestinationTarget.getApiDestinationArn())
-                .targetParameters(CfnPipe.PipeTargetParametersProperty.builder()
-                        .httpParameters(CfnPipe.PipeTargetHttpParametersProperty.builder()
-                                .pathParameterValues(List.of("$.id"))
-                                .build())
-                        .build())
-                .roleArn(pipeRole.getRoleArn())
-                .build();
-    }
-
-    @NotNull
-    private Role createPipeRole(IQueue pipeSource, IFunction enrichment, ApiDestination apiDestinationTarget, IQueue dlq) {
-        var sourcePolicy = createSourcePolicy(pipeSource, dlq);
-        var enrichmentPolicy = createEnrichmentPolicy(enrichment);
-        var targetPolicy = createTargetPolicy(apiDestinationTarget);
-
-        return Role.Builder.create(this, "Role")
-                .inlinePolicies(Map.of(
-                        "sourcePolicy", sourcePolicy,
-                        "enrichmentPolicy", enrichmentPolicy,
-                        "targetPolicy", targetPolicy
-                ))
-                .assumedBy(new ServicePrincipal("pipes.amazonaws.com"))
-                .build();
-    }
-
-    private static PolicyDocument createTargetPolicy(ApiDestination apiDestinationTarget) {
-        var apiDestinationArn = apiDestinationTarget.getApiDestinationArn();
-        return PolicyDocument.Builder.create()
-                .statements(List.of(
-                        PolicyStatement.Builder.create()
-                                .effect(Effect.ALLOW)
-                                .actions(List.of("events:InvokeApiDestination"))
-                                .resources(List.of(apiDestinationArn))
-                                .build()
-                ))
-                .build();
-    }
-
-    private static PolicyDocument createEnrichmentPolicy(IFunction enrichment) {
-        var functionArn = enrichment.getFunctionArn();
-        return PolicyDocument.Builder.create()
-                .statements(List.of(
-                        PolicyStatement.Builder.create()
-                                .effect(Effect.ALLOW)
-                                .actions(List.of("lambda:InvokeFunction"))
-                                .resources(List.of(functionArn))
-                                .build()
-                ))
-                .build();
-    }
-
-    private static PolicyDocument createSourcePolicy(IQueue pipeSource, IQueue dlq) {
-        var queueArn = pipeSource.getQueueArn();
-        var dlqArn = dlq.getQueueArn();
-        return PolicyDocument.Builder.create()
-                .statements(List.of(
-                        PolicyStatement.Builder.create()
-                                .effect(Effect.ALLOW)
-                                .actions(List.of("sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:GetQueueAttributes"))
-                                .resources(List.of(queueArn, dlqArn))
-                                .build()
-                ))
-                .build();
-    }
-
     private ApiDestination createApiDestinationTarget(String endpointUrl, Authorization authorization) {
         var connection = Connection.Builder.create(this, "ThirdPartyService")
                 .authorization(authorization)
@@ -202,42 +130,8 @@ public class AppStack extends Stack {
                 .build();
     }
 
-    private void createCatchAllRule(EventBus eventBus, Queue source) {
-        var rule = Rule.Builder.create(this, "CatchAllRule")
-                .eventBus(eventBus)
-                .eventPattern(EventPattern.builder().source(List.of("*")).build())
-                .targets(List.of(SqsQueue.Builder.create(source).build()))
-                .build();
-        var ruleDefaultChild = rule.getNode().getDefaultChild();
-        if (ruleDefaultChild instanceof CfnRule cfnRule) {
-            cfnRule.setEventPattern(Map.of(
-                    "source", List.of(Map.of(
-                            "prefix", ""
-                    ))
-            ));
-        }
-    }
-
     private EventBus createEventBridgeBus() {
         return EventBus.Builder.create(this, "WorkbenchEventBridgePipesBus")
-                .build();
-    }
-
-    private Queue createQueue(int maxRetryCount, IQueue dlq) {
-        return Queue.Builder.create(this, "ThirdPartyApiRequestsQueue")
-                .visibilityTimeout(Duration.seconds(60))
-                .retentionPeriod(Duration.seconds(60))
-                .removalPolicy(RemovalPolicy.DESTROY)
-                .deadLetterQueue(DeadLetterQueue.builder()
-                        .maxReceiveCount(maxRetryCount)
-                        .queue(dlq)
-                        .build())
-                .build();
-    }
-
-    private Queue createDlq() {
-        return Queue.Builder.create(this, "ThirdPartyApiRequestsDlq")
-                .removalPolicy(RemovalPolicy.DESTROY)
                 .build();
     }
 
@@ -286,20 +180,5 @@ public class AppStack extends Stack {
                 .archiveBaseName("app")
                 .buildTool(BuildTool.GRADLE)
                 .build();
-    }
-
-    @Data
-    @lombok.Builder
-    public static class AppStackProps implements StackProps {
-        private final Boolean analyticsReporting;
-        private final Boolean crossRegionReferences;
-        private final String description;
-        private final Environment env;
-        private final PermissionsBoundary permissionsBoundary;
-        private final String stackName;
-        private final Boolean suppressTemplateIndentation;
-        private final IStackSynthesizer synthesizer;
-        private final Map<String, String> tags;
-        private final Boolean terminationProtection;
     }
 }
