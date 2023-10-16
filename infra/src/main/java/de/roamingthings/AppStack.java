@@ -62,10 +62,11 @@ public class AppStack extends Stack {
 
         var personTable = createPesonTable();
         var eventBus = createEventBridgeBus();
+        var enrichmentFunction = createEnrichmentFunction(personTable);
         var pipeProps = EnrichedEventApiDestinationPipe.EnrichedEventApiDestinationPipeProps.builder()
                 .sourceEventBus(eventBus)
                 .eventPattern(EventPattern.builder().source(List.of("*")).build())
-                .enrichmentFunction(createEnricherFunction(personTable))
+                .enrichmentFunction(enrichmentFunction)
                 .apiDestination(apiDestinationTarget)
                 .maxRetryCount(1)
                 .sourceBatchSize(1)
@@ -135,7 +136,7 @@ public class AppStack extends Stack {
                 .build();
     }
 
-    private IFunction createEnricherFunction(ITable personTable) {
+    private IFunction createEnrichmentFunction(ITable personTable) {
         var environmentVariables = Map.of(
                 "PERSON_TABLE_NAME", personTable.getTableName()
         );
