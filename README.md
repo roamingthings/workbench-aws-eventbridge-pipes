@@ -27,6 +27,17 @@ CDK before, you may need to run `cdk bootstrap` to create the resources required
 To build and deploy the application, follow these steps:
 
 1. Clone this repository.
-2. Run `./gradlew clean :app:optimizedJitJarAll` to build the Lambda function that will enrich the events.
-3. Change to the `infra` directory by running `cd infra`.
-4. Run `cdk deploy` to deploy the application.
+2. Navigate to [webhook.site](https://webhook.site) and create a new endpoint. Copy the URL of the endpoint.
+3. Run `./gradlew clean :app:optimizedJitJarAll` to build the Lambda function that will enrich the events.
+4. Change to the `infra` directory by running `cd infra`.
+5. Run `cdk deploy --parameters "endpointUrl=<url of the endpoint from step 2>/*"` to deploy the application.
+
+## Test the Application
+
+To test the application, follow these steps:
+
+1. Navigate to your [webhook.site](https://webhook.site).
+2. Run `./gradlew :app:systemTests` to send a test event to the application.
+
+After a few seconds you should see a request appear in your webhook.site dashboard. The request should contain an
+authorization header and body that was added by the Lambda function.
