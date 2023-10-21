@@ -8,10 +8,19 @@ import io.micronaut.starter.options.BuildTool;
 import software.amazon.awscdk.CfnOutput;
 import software.amazon.awscdk.CfnParameter;
 import software.amazon.awscdk.Duration;
+import software.amazon.awscdk.Fn;
 import software.amazon.awscdk.RemovalPolicy;
 import software.amazon.awscdk.SecretValue;
 import software.amazon.awscdk.Stack;
 import software.amazon.awscdk.StackProps;
+import software.amazon.awscdk.services.apigateway.CfnStage;
+import software.amazon.awscdk.services.apigateway.HttpIntegration;
+import software.amazon.awscdk.services.apigateway.IntegrationOptions;
+import software.amazon.awscdk.services.apigateway.MethodOptions;
+import software.amazon.awscdk.services.apigateway.PassthroughBehavior;
+import software.amazon.awscdk.services.apigateway.ProxyResourceOptions;
+import software.amazon.awscdk.services.apigateway.RestApi;
+import software.amazon.awscdk.services.apigateway.StageOptions;
 import software.amazon.awscdk.services.dynamodb.Attribute;
 import software.amazon.awscdk.services.dynamodb.AttributeType;
 import software.amazon.awscdk.services.dynamodb.BillingMode;
@@ -40,6 +49,7 @@ import java.util.Map;
 
 import static de.roamingthings.InfraConstants.EVENT_BUS_NAME_EXPORT_NAME;
 import static de.roamingthings.InfraConstants.PERSON_TABLE_NAME_EXPORT_NAME;
+import static software.amazon.awscdk.services.apigateway.EndpointType.REGIONAL;
 
 public class AppStack extends Stack {
 
@@ -53,14 +63,17 @@ public class AppStack extends Stack {
         var endpointUrl = CfnParameter.Builder.create(this, "endpointUrl")
                 .type("String")
                 .description("The URL of the endpoint")
-                .build();
+                .build()
+                .getValueAsString();
+
+        var proxyEndpointUrl = createApiGatewayProxy(endpointUrl);
 
         var apiDestinationTarget = createApiDestinationTarget(
-                endpointUrl.getValueAsString(),
+                proxyEndpointUrl,
                 Authorization.basic("Toniuser", SecretValue.unsafePlainText("SomeSecret"))
         );
 
-        var personTable = createPesonTable();
+        var personTable = createPersonTable();
         var eventBus = createEventBridgeBus();
         var enrichmentFunction = createEnrichmentFunction(personTable);
         var pipeProps = EnrichedEventApiDestinationPipe.EnrichedEventApiDestinationPipeProps.builder()
@@ -73,7 +86,6 @@ public class AppStack extends Stack {
                 .sourceMaximumBatchingWindowInSeconds(6)
                 .visibilityTimeout(Duration.seconds(30))
                 .retryPeriod(Duration.minutes(5))
-                .endpointUrl(endpointUrl.getValueAsString())
                 .targetHttpParameters(CfnPipe.PipeTargetHttpParametersProperty.builder()
                         .pathParameterValues(List.of("$.id"))
                         .build())
@@ -101,7 +113,57 @@ public class AppStack extends Stack {
                 .build();
     }
 
-    private ITable createPesonTable() {
+    private String createApiGatewayProxy(String endpointUrl) {
+        var proxyEndpointUrl = Fn.join("", List.of(Fn.select(0, Fn.split("/*", endpointUrl)), "/{proxy}"));
+
+        var description = "Forwarding requests to third party service";
+        var stageName = "prod";
+        var dataTraceEnabled = true;
+        var metricsEnabled = true;
+        var restApi = RestApi.Builder.create(this, "ApiProxy")
+                .description(description)
+                .endpointTypes(List.of(REGIONAL))
+                .deployOptions(StageOptions.builder()
+                        .stageName(stageName)
+                        .build())
+                .build();
+
+        var stage = restApi.getDeploymentStage().getNode().getDefaultChild();
+        if (stage instanceof CfnStage cfnStage) {
+            cfnStage.setMethodSettings(List.of(
+                    CfnStage.MethodSettingProperty.builder()
+                            .resourcePath("/*")
+                            .httpMethod("*")
+                            .loggingLevel("INFO")
+                            .dataTraceEnabled(dataTraceEnabled)
+                            .metricsEnabled(metricsEnabled)
+                            .build()
+            ));
+        }
+        restApi.getRoot()
+                .addProxy(ProxyResourceOptions.builder()
+                        .anyMethod(true)
+                        .defaultIntegration(HttpIntegration.Builder.create(proxyEndpointUrl)
+                                .httpMethod("ANY")
+                                .proxy(true)
+                                .options(IntegrationOptions.builder()
+                                        .credentialsPassthrough(true)
+                                        .passthroughBehavior(PassthroughBehavior.WHEN_NO_MATCH)
+                                        .requestParameters(Map.of(
+                                                "integration.request.path.proxy", "method.request.path.proxy"
+                                        ))
+                                        .build())
+                                .build())
+                        .defaultMethodOptions(MethodOptions.builder()
+                                .requestParameters(Map.of(
+                                        "method.request.path.proxy", true
+                                ))
+                                .build())
+                        .build());
+        return "https://%s.execute-api.%s.amazonaws.com/%s/*".formatted(restApi.getRestApiId(), this.getRegion(), stageName);
+    }
+
+    private ITable createPersonTable() {
         return Table.Builder.create(this, "PersonTable")
                 .billingMode(BillingMode.PAY_PER_REQUEST)
                 .partitionKey(Attribute.builder()
