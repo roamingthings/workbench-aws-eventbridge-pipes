@@ -46,7 +46,6 @@ public class EnrichedEventApiDestinationPipe extends Construct {
         Objects.requireNonNull(props.maxRetryCount, "'maxRetryCount' must be provided");
         Objects.requireNonNull(props.visibilityTimeout, "'visibilityTimeout' must be provided");
         Objects.requireNonNull(props.retryPeriod, "'retryPeriod' must be provided");
-        Objects.requireNonNull(props.endpointUrl, "'endpointUrl' must be provided");
 
         createDlq(props);
         createSourceQueue(props);
@@ -222,10 +221,6 @@ public class EnrichedEventApiDestinationPipe extends Construct {
          * Default: Duration.minutes(5)
          */
         private final Duration retryPeriod;
-        /**
-         * The URL of the API destination.
-         */
-        private final String endpointUrl;
         /**
          * The parameters to pass to the API destination.
          */
