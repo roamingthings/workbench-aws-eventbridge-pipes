@@ -1,121 +1,32 @@
-## Micronaut 4.1.4 Documentation
+# Workbench for AWS EventBridge Pipeline with API Destinations
 
-- [User Guide](https://docs.micronaut.io/4.1.4/guide/index.html)
-- [API Reference](https://docs.micronaut.io/4.1.4/api/index.html)
-- [Configuration Reference](https://docs.micronaut.io/4.1.4/guide/configurationreference.html)
-- [Micronaut Guides](https://guides.micronaut.io/index.html)
----
+_Please note that this application will create AWS resources that may incur costs on your account._
 
-## Notes
+This is a workbench for AWS EventBridge Pipeline with API Destinations. It demonstrates how to use EventBridge Pipeline
+to build a serverless event-driven application that integrates with a third party application that can be anywhere
+on the public internet.
 
-Create a link at [webhook.site](https://webhook.site)
+![Architecture: EventBridge Event - Rule - SQS - Pipe - Lambda Enrichment - API destination - 3rd Party API](docs/images/architecture.svg)
 
-Deploy the stack with the endpointUrl as parameter
-```
-cd infra
-../gradlew :app:clean :app:optimizedJitJarAll && cdk synth && cdk deploy --parameters "endpointUrl=https://webhook.site/3e7b4c62-8699-4776-a498-e00f1409ea58/*"
-```
+Since (error) logging is not available in EventBridge Pipeline, this workbench also demonstrates how to use an API
+Gateway as a proxy allowing to observe the events and responses that are sent to the third party API.
 
-Test the application
-```
-./gradlew :app:systemTests
-```
+![Architecture: EventBridge Event - Rule - SQS - Pipe - Lambda Enrichment - API destination - API Gateway - 3rd Party API](docs/images/architecture_api_gateway.svg)
 
-## Handler
+## Prerequisites
 
-Handler: io.micronaut.function.aws.proxy.payload1.ApiGatewayProxyRequestEventFunction
+* [Java 17 (Corretto recommended)](https://docs.aws.amazon.com/corretto/latest/corretto-17-ug/downloads-list.html)
+* [AWS CDK](https://docs.aws.amazon.com/cdk/latest/guide/getting_started.html)
+* [Node.js](https://nodejs.org/en/download/) as required by the AWS CDK
 
-[AWS Lambda Handler](https://docs.aws.amazon.com/lambda/latest/dg/java-handler.html)
+You will also need to have an AWS account and have your AWS credentials configured on your machine. If you have not used
+CDK before, you may need to run `cdk bootstrap` to create the resources required to deploy CDK applications.
 
-## Requisites
+## Build and Deploy the Application
 
-- [AWS Account](https://aws.amazon.com/free/)
-- [CDK CLI](https://docs.aws.amazon.com/cdk/v2/guide/cli.html)
-- [AWS CLI](https://aws.amazon.com/cli/)
+To build and deploy the application, follow these steps:
 
-## How to deploy
-
-### Generate the deployable artifact
-
-```
-./gradlew :app:optimizedJitJarAll
-./gradlew test
-```
-
-### Deploy
-
-The `infra/cdk.json` file tells the CDK Toolkit how to execute your app.
-
-`cd infra`
-`cdk synth` - emits the synthesized CloudFormation template
-`cdk deploy` - deploy this stack to your default AWS account/region
-`cd ..`
-
-Other useful commands:
-
-`cdk diff` - compare deployed stack with current state
-`cdk docs`- open CDK documentation
-
-### Cleanup
-
-```
-cd infra
-cdk destroy
-cd ..
-```
-
-
-- [Shadow Gradle Plugin](https://plugins.gradle.org/plugin/com.github.johnrengelman.shadow)
-- [Micronaut Gradle Plugin documentation](https://micronaut-projects.github.io/micronaut-gradle-plugin/latest/)
-- [GraalVM Gradle Plugin documentation](https://graalvm.github.io/native-build-tools/latest/gradle-plugin.html)
-## Feature snapstart documentation
-
-- [https://docs.aws.amazon.com/lambda/latest/dg/snapstart.html](https://docs.aws.amazon.com/lambda/latest/dg/snapstart.html)
-
-
-## Feature mockito documentation
-
-- [https://site.mockito.org](https://site.mockito.org)
-
-
-## Feature micronaut-aot documentation
-
-- [Micronaut AOT documentation](https://micronaut-projects.github.io/micronaut-aot/latest/guide/)
-
-
-## Feature aws-lambda-events-serde documentation
-
-- [Micronaut AWS Lambda Events Serde documentation](https://micronaut-projects.github.io/micronaut-aws/snapshot/guide/#eventsLambdaSerde)
-
-- [https://github.com/aws/aws-lambda-java-libs/tree/main/aws-lambda-java-events](https://github.com/aws/aws-lambda-java-libs/tree/main/aws-lambda-java-events)
-
-
-## Feature aws-cdk documentation
-
-- [https://docs.aws.amazon.com/cdk/v2/guide/home.html](https://docs.aws.amazon.com/cdk/v2/guide/home.html)
-
-
-## Feature crac documentation
-
-- [Micronaut Support for CRaC (Coordinated Restore at Checkpoint) documentation](https://micronaut-projects.github.io/micronaut-crac/latest/guide)
-
-- [https://wiki.openjdk.org/display/CRaC](https://wiki.openjdk.org/display/CRaC)
-
-
-## Feature serialization-jackson documentation
-
-- [Micronaut Serialization Jackson Core documentation](https://micronaut-projects.github.io/micronaut-serialization/latest/guide/)
-
-
-## Feature lombok documentation
-
-- [Micronaut Project Lombok documentation](https://docs.micronaut.io/latest/guide/index.html#lombok)
-
-- [https://projectlombok.org/features/all](https://projectlombok.org/features/all)
-
-
-## Feature aws-lambda documentation
-
-- [Micronaut AWS Lambda Function documentation](https://micronaut-projects.github.io/micronaut-aws/latest/guide/index.html#lambda)
-
-
+1. Clone this repository.
+2. Run `./gradlew clean :app:optimizedJitJarAll` to build the Lambda function that will enrich the events.
+3. Change to the `infra` directory by running `cd infra`.
+4. Run `cdk deploy` to deploy the application.
